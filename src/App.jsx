@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
 const navItems = [
@@ -10,10 +10,10 @@ const navItems = [
 ]
 
 const storageKeys = {
-  downtime: 'productionOS.v0.2.downtime',
-  quality: 'productionOS.v0.2.quality',
-  pm: 'productionOS.v0.2.pm',
-  improvement: 'productionOS.v0.2.improvement',
+  downtime: 'productionOS.v0.3.downtime',
+  quality: 'productionOS.v0.3.quality',
+  pm: 'productionOS.v0.3.pm',
+  improvement: 'productionOS.v0.3.improvement',
 }
 
 const kpiCards = [
@@ -222,7 +222,7 @@ function Sidebar({ active, onSelect }) {
         <div className="brand-mark">PE</div>
         <div>
           <p className="brand-label">Production Engineer OS</p>
-          <p className="brand-note">v0.2 dashboard suite</p>
+          <p className="brand-note">v0.3 dashboard suite</p>
         </div>
       </div>
       <nav className="sidebar-nav" aria-label="Main navigation">
@@ -350,19 +350,13 @@ function DataTable({ headers, rows, rowMapper }) {
   )
 }
 
-function HomePage({ searchValue, onSearch, statusValue, onStatusChange }) {
+function HomePage() {
   const lineFiltered = useMemo(
     () =>
-      linePerformance.filter((entry) => {
-        const query = searchValue.toLowerCase()
-        const statusMatch = statusValue === 'All' || entry.value.toLowerCase() === statusValue.toLowerCase()
-        const searchMatch =
-          !query ||
-          entry.label.toLowerCase().includes(query) ||
-          entry.value.toLowerCase().includes(query)
-        return statusMatch && searchMatch
+      linePerformance.filter(() => {
+        return true
       }),
-    [searchValue, statusValue],
+    [],
   )
 
   return (
@@ -374,16 +368,6 @@ function HomePage({ searchValue, onSearch, statusValue, onStatusChange }) {
         </div>
         <div className="header-chip">Last update: 10 mins ago</div>
       </section>
-      <PageToolbar
-        searchValue={searchValue}
-        onSearch={onSearch}
-        statusValue={statusValue}
-        onStatusChange={onStatusChange}
-        statusOptions={['All', 'Running', 'Review', 'Idle']}
-        onExport={() => {}}
-        exportLabel="Export"
-        showCreate={false}
-      />
 
       <section className="kpi-grid">
         {kpiCards.map((card) => (
@@ -494,7 +478,6 @@ function DowntimePage({
   statusValue,
   onStatusChange,
   onExport,
-  onAdd,
   showForm,
   onToggleForm,
   formData,
@@ -593,7 +576,6 @@ function QualityPage({
   statusValue,
   onStatusChange,
   onExport,
-  onAdd,
   showForm,
   onToggleForm,
   formData,
@@ -687,7 +669,6 @@ function PMPage({
   statusValue,
   onStatusChange,
   onExport,
-  onAdd,
   showForm,
   onToggleForm,
   formData,
@@ -774,7 +755,19 @@ function PMPage({
   )
 }
 
-function ImprovementPage({ data, searchValue, onSearch, statusValue, onStatusChange, onExport }) {
+function ImprovementPage({
+  data,
+  searchValue,
+  onSearch,
+  statusValue,
+  onStatusChange,
+  onExport,
+  showForm,
+  onToggleForm,
+  formData,
+  onFormChange,
+  onFormSubmit,
+}) {
   const filteredRows = useMemo(() => filterRows(data, searchValue, statusValue), [data, searchValue, statusValue])
 
   return (
@@ -795,8 +788,45 @@ function ImprovementPage({ data, searchValue, onSearch, statusValue, onStatusCha
         statusOptions={allStatuses}
         onExport={() => onExport('improvement.csv', data)}
         exportLabel="Export CSV"
-        showCreate={false}
+        onOpenForm={onToggleForm}
+        createLabel="New improvement"
+        showCreate
       />
+
+      {showForm ? (
+        <FormPanel title="Add Improvement" onCancel={onToggleForm} onSave={onFormSubmit} saveLabel="Save improvement">
+          <label className="field-label">
+            Problem
+            <input type="text" className="input-field" value={formData.problem} onChange={(e) => onFormChange('problem', e.target.value)} />
+          </label>
+          <label className="field-label">
+            Idea
+            <input type="text" className="input-field" value={formData.idea} onChange={(e) => onFormChange('idea', e.target.value)} />
+          </label>
+          <label className="field-label">
+            Benefit
+            <input type="text" className="input-field" value={formData.benefit} onChange={(e) => onFormChange('benefit', e.target.value)} />
+          </label>
+          <label className="field-label">
+            Owner
+            <input type="text" className="input-field" value={formData.owner} onChange={(e) => onFormChange('owner', e.target.value)} />
+          </label>
+          <label className="field-label">
+            Due Date
+            <input type="date" className="input-field" value={formData.due} onChange={(e) => onFormChange('due', e.target.value)} />
+          </label>
+          <label className="field-label">
+            Status
+            <select className="select-field" value={formData.status} onChange={(e) => onFormChange('status', e.target.value)}>
+              {allStatuses.filter((status) => status !== 'All').map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </select>
+          </label>
+        </FormPanel>
+      ) : null}
 
       <DataTable
         headers={['Problem', 'Idea', 'Benefit', 'Owner', 'Due Date', 'Status']}
@@ -825,10 +855,11 @@ function App() {
   const [downtimeData, setDowntimeData] = useState(() => loadStoredData('downtime', downtimeRecords))
   const [qualityData, setQualityData] = useState(() => loadStoredData('quality', qualityRecords))
   const [pmData, setPmData] = useState(() => loadStoredData('pm', pmRecords))
-  const [improvementData] = useState(() => loadStoredData('improvement', improvementRecords))
+  const [improvementData, setImprovementData] = useState(() => loadStoredData('improvement', improvementRecords))
   const [showDowntimeForm, setShowDowntimeForm] = useState(false)
   const [showQualityForm, setShowQualityForm] = useState(false)
   const [showPmForm, setShowPmForm] = useState(false)
+  const [showImprovementForm, setShowImprovementForm] = useState(false)
   const [downtimeForm, setDowntimeForm] = useState({
     machine: '',
     line: '',
@@ -854,6 +885,14 @@ function App() {
     owner: '',
     status: 'Due soon',
   })
+  const [improvementForm, setImprovementForm] = useState({
+    problem: '',
+    idea: '',
+    benefit: '',
+    owner: '',
+    due: '',
+    status: 'Open',
+  })
 
   useEffect(() => {
     saveStoredData('downtime', downtimeData)
@@ -866,6 +905,10 @@ function App() {
   useEffect(() => {
     saveStoredData('pm', pmData)
   }, [pmData])
+
+  useEffect(() => {
+    saveStoredData('improvement', improvementData)
+  }, [improvementData])
 
   function handleFormChange(setter, field, value) {
     setter((current) => ({ ...current, [field]: value }))
@@ -887,6 +930,12 @@ function App() {
     setPmData((current) => [pmForm, ...current])
     setPmForm({ machine: '', task: '', last: '', next: '', owner: '', status: 'Due soon' })
     setShowPmForm(false)
+  }
+
+  function handleImprovementSubmit() {
+    setImprovementData((current) => [improvementForm, ...current])
+    setImprovementForm({ problem: '', idea: '', benefit: '', owner: '', due: '', status: 'Open' })
+    setShowImprovementForm(false)
   }
 
   function renderPage() {
@@ -948,23 +997,28 @@ function App() {
             statusValue={statusFilter}
             onStatusChange={setStatusFilter}
             onExport={(filename, rows) => exportToCsv(filename, ['Problem', 'Idea', 'Benefit', 'Owner', 'Due Date', 'Status'], rows)}
+            showForm={showImprovementForm}
+            onToggleForm={() => setShowImprovementForm((current) => !current)}
+            formData={improvementForm}
+            onFormChange={(field, value) => handleFormChange(setImprovementForm, field, value)}
+            onFormSubmit={handleImprovementSubmit}
           />
         )
       default:
         return (
-          <HomePage
-            searchValue={searchValue}
-            onSearch={setSearchValue}
-            statusValue={statusFilter}
-            onStatusChange={setStatusFilter}
-          />
+          <HomePage />
         )
     }
   }
 
+  const previousPageRef = useRef(activePage)
+
   useEffect(() => {
-    setSearchValue('')
-    setStatusFilter('All')
+    if (previousPageRef.current !== 'Home' && activePage !== 'Home') {
+      setSearchValue('')
+      setStatusFilter('All')
+    }
+    previousPageRef.current = activePage
   }, [activePage])
 
   return (
