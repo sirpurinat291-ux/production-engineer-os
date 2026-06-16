@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import './App.css'
 
 const navItems = [
@@ -8,6 +8,13 @@ const navItems = [
   { id: 'PM', label: 'PM' },
   { id: 'Improvement', label: 'Improvement Log' },
 ]
+
+const storageKeys = {
+  downtime: 'productionOS.v0.2.downtime',
+  quality: 'productionOS.v0.2.quality',
+  pm: 'productionOS.v0.2.pm',
+  improvement: 'productionOS.v0.2.improvement',
+}
 
 const kpiCards = [
   { label: 'OEE', value: '78.4%', note: 'Machining line efficiency' },
@@ -137,12 +144,70 @@ const statusStyles = {
   Good: 'good',
   Running: 'good',
   Resolved: 'good',
+  Planned: 'good',
+  Scheduled: 'good',
   'Due soon': 'warning',
   'In progress': 'warning',
-  Warning: 'warning',
+  Review: 'warning',
   Open: 'alert',
   Hold: 'alert',
   Investigating: 'alert',
+}
+
+const allStatuses = ['All', 'Open', 'In progress', 'Due soon', 'Planned', 'Scheduled', 'Resolved', 'Review', 'Hold', 'Investigating']
+
+function loadStoredData(key, fallback) {
+  if (typeof window === 'undefined') return fallback
+  const stored = window.localStorage.getItem(storageKeys[key])
+  if (!stored) return fallback
+  try {
+    const parsed = JSON.parse(stored)
+    return Array.isArray(parsed) ? parsed : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function saveStoredData(key, data) {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(storageKeys[key], JSON.stringify(data))
+}
+
+function csvEscape(value) {
+  const text = String(value ?? '')
+  return text.includes(',') || text.includes('\n') || text.includes('"')
+    ? `"${text.replace(/"/g, '""')}"`
+    : text
+}
+
+function exportToCsv(filename, headers, rows) {
+  const headerLine = headers.map(csvEscape).join(',')
+  const lines = rows.map((row) =>
+    headers
+      .map((key) => csvEscape(row[key] ?? row[key.toLowerCase()] ?? ''))
+      .join(','),
+  )
+  const csv = [headerLine, ...lines].join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
+function filterRows(rows, query, status) {
+  const normalized = query.trim().toLowerCase()
+  return rows.filter((row) => {
+    const statusMatch = status === 'All' || !status || Object.values(row).some((value) => String(value).toLowerCase() === status.toLowerCase())
+    const searchMatch =
+      !normalized ||
+      Object.values(row).some((value) => String(value).toLowerCase().includes(normalized))
+    return statusMatch && searchMatch
+  })
 }
 
 function StatusPill({ children }) {
@@ -157,7 +222,7 @@ function Sidebar({ active, onSelect }) {
         <div className="brand-mark">PE</div>
         <div>
           <p className="brand-label">Production Engineer OS</p>
-          <p className="brand-note">v0.1 dashboard suite</p>
+          <p className="brand-note">v0.2 dashboard suite</p>
         </div>
       </div>
       <nav className="sidebar-nav" aria-label="Main navigation">
@@ -177,7 +242,129 @@ function Sidebar({ active, onSelect }) {
   )
 }
 
-function HomePage() {
+function BottomNav({ active, onSelect }) {
+  return (
+    <div className="bottom-nav" role="navigation" aria-label="Mobile navigation">
+      {navItems.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          className={`nav-item bottom ${active === item.id ? 'active' : ''}`}
+          onClick={() => onSelect(item.id)}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function PageToolbar({
+  searchValue,
+  onSearch,
+  statusValue,
+  onStatusChange,
+  statusOptions,
+  onExport,
+  exportLabel,
+  onOpenForm,
+  createLabel,
+  showCreate,
+}) {
+  return (
+    <div className="toolbar-row">
+      <div className="toolbar-group">
+        <label className="field-label">
+          Search
+          <input
+            type="search"
+            className="input-field"
+            placeholder="Search records..."
+            value={searchValue}
+            onChange={(event) => onSearch(event.target.value)}
+          />
+        </label>
+        <label className="field-label">
+          Status
+          <select className="select-field" value={statusValue} onChange={(event) => onStatusChange(event.target.value)}>
+            {statusOptions.map((status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="toolbar-actions">
+        {showCreate ? (
+          <button type="button" className="button secondary" onClick={onOpenForm}>
+            {createLabel}
+          </button>
+        ) : null}
+        <button type="button" className="button primary" onClick={onExport}>
+          {exportLabel}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function FormPanel({ title, children, onCancel, onSave, saveLabel }) {
+  return (
+    <section className="card form-panel">
+      <div className="form-panel-heading">
+        <div>
+          <p className="eyebrow">New record</p>
+          <h2>{title}</h2>
+        </div>
+        <button type="button" className="button secondary small" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+      <div className="form-grid">{children}</div>
+      <div className="form-footer">
+        <button type="button" className="button primary" onClick={onSave}>
+          {saveLabel}
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function DataTable({ headers, rows, rowMapper }) {
+  return (
+    <div className="table-panel">
+      <div className="table-scroll">
+        <table className="data-table">
+          <thead>
+            <tr>
+              {headers.map((header) => (
+                <th key={header}>{header}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>{rows.map(rowMapper)}</tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function HomePage({ searchValue, onSearch, statusValue, onStatusChange }) {
+  const lineFiltered = useMemo(
+    () =>
+      linePerformance.filter((entry) => {
+        const query = searchValue.toLowerCase()
+        const statusMatch = statusValue === 'All' || entry.value.toLowerCase() === statusValue.toLowerCase()
+        const searchMatch =
+          !query ||
+          entry.label.toLowerCase().includes(query) ||
+          entry.value.toLowerCase().includes(query)
+        return statusMatch && searchMatch
+      }),
+    [searchValue, statusValue],
+  )
+
   return (
     <>
       <section className="dashboard-header">
@@ -187,6 +374,16 @@ function HomePage() {
         </div>
         <div className="header-chip">Last update: 10 mins ago</div>
       </section>
+      <PageToolbar
+        searchValue={searchValue}
+        onSearch={onSearch}
+        statusValue={statusValue}
+        onStatusChange={onStatusChange}
+        statusOptions={['All', 'Running', 'Review', 'Idle']}
+        onExport={() => {}}
+        exportLabel="Export"
+        showCreate={false}
+      />
 
       <section className="kpi-grid">
         {kpiCards.map((card) => (
@@ -205,7 +402,7 @@ function HomePage() {
             <strong>Real-time view</strong>
           </div>
           <div className="line-status-list">
-            {linePerformance.map((entry) => (
+            {lineFiltered.map((entry) => (
               <div key={entry.label} className="line-item">
                 <div>
                   <p className="line-name">{entry.label}</p>
@@ -214,6 +411,7 @@ function HomePage() {
                 <StatusPill>{entry.value}</StatusPill>
               </div>
             ))}
+            {lineFiltered.length === 0 ? <p className="empty-state">No matching line status</p> : null}
           </div>
         </article>
 
@@ -289,26 +487,22 @@ function HomePage() {
   )
 }
 
-function DataTable({ headers, rows, rowMapper }) {
-  return (
-    <div className="table-panel">
-      <div className="table-scroll">
-        <table className="data-table">
-          <thead>
-            <tr>
-              {headers.map((header) => (
-                <th key={header}>{header}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>{rows.map(rowMapper)}</tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
+function DowntimePage({
+  data,
+  searchValue,
+  onSearch,
+  statusValue,
+  onStatusChange,
+  onExport,
+  onAdd,
+  showForm,
+  onToggleForm,
+  formData,
+  onFormChange,
+  onFormSubmit,
+}) {
+  const filteredRows = useMemo(() => filterRows(data, searchValue, statusValue), [data, searchValue, statusValue])
 
-function DowntimePage() {
   return (
     <>
       <section className="dashboard-header">
@@ -316,21 +510,75 @@ function DowntimePage() {
           <p className="eyebrow">Downtime management</p>
           <h1>Recent equipment stops</h1>
         </div>
-        <div className="header-chip">3 open incidents</div>
+        <div className="header-chip">{filteredRows.length} records</div>
       </section>
+
+      <PageToolbar
+        searchValue={searchValue}
+        onSearch={onSearch}
+        statusValue={statusValue}
+        onStatusChange={onStatusChange}
+        statusOptions={allStatuses}
+        onExport={() => onExport('downtime.csv', data)}
+        exportLabel="Export CSV"
+        onOpenForm={onToggleForm}
+        createLabel="New downtime"
+        showCreate
+      />
+
+      {showForm ? (
+        <FormPanel title="Add Downtime" onCancel={onToggleForm} onSave={onFormSubmit} saveLabel="Save downtime">
+          <label className="field-label">
+            Machine
+            <input type="text" className="input-field" value={formData.machine} onChange={(e) => onFormChange('machine', e.target.value)} />
+          </label>
+          <label className="field-label">
+            Line
+            <input type="text" className="input-field" value={formData.line} onChange={(e) => onFormChange('line', e.target.value)} />
+          </label>
+          <label className="field-label">
+            Duration
+            <input type="text" className="input-field" value={formData.duration} onChange={(e) => onFormChange('duration', e.target.value)} placeholder="e.g. 45m" />
+          </label>
+          <label className="field-label">
+            Cause
+            <input type="text" className="input-field" value={formData.cause} onChange={(e) => onFormChange('cause', e.target.value)} />
+          </label>
+          <label className="field-label">
+            Action
+            <input type="text" className="input-field" value={formData.action} onChange={(e) => onFormChange('action', e.target.value)} />
+          </label>
+          <label className="field-label">
+            Owner
+            <input type="text" className="input-field" value={formData.owner} onChange={(e) => onFormChange('owner', e.target.value)} />
+          </label>
+          <label className="field-label">
+            Status
+            <select className="select-field" value={formData.status} onChange={(e) => onFormChange('status', e.target.value)}>
+              {allStatuses.filter((status) => status !== 'All').map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </select>
+          </label>
+        </FormPanel>
+      ) : null}
 
       <DataTable
         headers={['Machine', 'Line', 'Duration', 'Cause', 'Action', 'Owner', 'Status']}
-        rows={downtimeRecords}
-        rowMapper={(row) => (
-          <tr key={`${row.machine}-${row.line}`}>
+        rows={filteredRows}
+        rowMapper={(row, index) => (
+          <tr key={`${row.machine}-${row.line}-${index}`}>
             <td>{row.machine}</td>
             <td>{row.line}</td>
             <td>{row.duration}</td>
             <td>{row.cause}</td>
             <td>{row.action}</td>
             <td>{row.owner}</td>
-            <td><StatusPill>{row.status}</StatusPill></td>
+            <td>
+              <StatusPill>{row.status}</StatusPill>
+            </td>
           </tr>
         )}
       />
@@ -338,7 +586,22 @@ function DowntimePage() {
   )
 }
 
-function QualityPage() {
+function QualityPage({
+  data,
+  searchValue,
+  onSearch,
+  statusValue,
+  onStatusChange,
+  onExport,
+  onAdd,
+  showForm,
+  onToggleForm,
+  formData,
+  onFormChange,
+  onFormSubmit,
+}) {
+  const filteredRows = useMemo(() => filterRows(data, searchValue, statusValue), [data, searchValue, statusValue])
+
   return (
     <>
       <section className="dashboard-header">
@@ -346,20 +609,70 @@ function QualityPage() {
           <p className="eyebrow">Quality oversight</p>
           <h1>Defect tracking</h1>
         </div>
-        <div className="header-chip">2 items requiring follow-up</div>
+        <div className="header-chip">{filteredRows.length} records</div>
       </section>
+
+      <PageToolbar
+        searchValue={searchValue}
+        onSearch={onSearch}
+        statusValue={statusValue}
+        onStatusChange={onStatusChange}
+        statusOptions={allStatuses}
+        onExport={() => onExport('quality.csv', data)}
+        exportLabel="Export CSV"
+        onOpenForm={onToggleForm}
+        createLabel="New quality issue"
+        showCreate
+      />
+
+      {showForm ? (
+        <FormPanel title="Add Quality Issue" onCancel={onToggleForm} onSave={onFormSubmit} saveLabel="Save issue">
+          <label className="field-label">
+            Defect Type
+            <input type="text" className="input-field" value={formData.defect} onChange={(e) => onFormChange('defect', e.target.value)} />
+          </label>
+          <label className="field-label">
+            Engine Number
+            <input type="text" className="input-field" value={formData.engine} onChange={(e) => onFormChange('engine', e.target.value)} />
+          </label>
+          <label className="field-label">
+            Process
+            <input type="text" className="input-field" value={formData.process} onChange={(e) => onFormChange('process', e.target.value)} />
+          </label>
+          <label className="field-label">
+            Cause
+            <input type="text" className="input-field" value={formData.cause} onChange={(e) => onFormChange('cause', e.target.value)} />
+          </label>
+          <label className="field-label">
+            Containment
+            <input type="text" className="input-field" value={formData.containment} onChange={(e) => onFormChange('containment', e.target.value)} />
+          </label>
+          <label className="field-label">
+            Status
+            <select className="select-field" value={formData.status} onChange={(e) => onFormChange('status', e.target.value)}>
+              {allStatuses.filter((status) => status !== 'All').map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </select>
+          </label>
+        </FormPanel>
+      ) : null}
 
       <DataTable
         headers={['Defect Type', 'Engine Number', 'Process', 'Cause', 'Containment', 'Status']}
-        rows={qualityRecords}
-        rowMapper={(row) => (
-          <tr key={row.engine}>
+        rows={filteredRows}
+        rowMapper={(row, index) => (
+          <tr key={`${row.engine}-${index}`}>
             <td>{row.defect}</td>
             <td>{row.engine}</td>
             <td>{row.process}</td>
             <td>{row.cause}</td>
             <td>{row.containment}</td>
-            <td><StatusPill>{row.status}</StatusPill></td>
+            <td>
+              <StatusPill>{row.status}</StatusPill>
+            </td>
           </tr>
         )}
       />
@@ -367,7 +680,22 @@ function QualityPage() {
   )
 }
 
-function PMPage() {
+function PMPage({
+  data,
+  searchValue,
+  onSearch,
+  statusValue,
+  onStatusChange,
+  onExport,
+  onAdd,
+  showForm,
+  onToggleForm,
+  formData,
+  onFormChange,
+  onFormSubmit,
+}) {
+  const filteredRows = useMemo(() => filterRows(data, searchValue, statusValue), [data, searchValue, statusValue])
+
   return (
     <>
       <section className="dashboard-header">
@@ -375,20 +703,70 @@ function PMPage() {
           <p className="eyebrow">Preventive maintenance</p>
           <h1>Maintenance schedule</h1>
         </div>
-        <div className="header-chip">5 due this week</div>
+        <div className="header-chip">{filteredRows.length} records</div>
       </section>
+
+      <PageToolbar
+        searchValue={searchValue}
+        onSearch={onSearch}
+        statusValue={statusValue}
+        onStatusChange={onStatusChange}
+        statusOptions={allStatuses}
+        onExport={() => onExport('pm.csv', data)}
+        exportLabel="Export CSV"
+        onOpenForm={onToggleForm}
+        createLabel="New PM task"
+        showCreate
+      />
+
+      {showForm ? (
+        <FormPanel title="Add PM Task" onCancel={onToggleForm} onSave={onFormSubmit} saveLabel="Save task">
+          <label className="field-label">
+            Machine
+            <input type="text" className="input-field" value={formData.machine} onChange={(e) => onFormChange('machine', e.target.value)} />
+          </label>
+          <label className="field-label">
+            PM Item
+            <input type="text" className="input-field" value={formData.task} onChange={(e) => onFormChange('task', e.target.value)} />
+          </label>
+          <label className="field-label">
+            Last PM
+            <input type="date" className="input-field" value={formData.last} onChange={(e) => onFormChange('last', e.target.value)} />
+          </label>
+          <label className="field-label">
+            Next PM
+            <input type="date" className="input-field" value={formData.next} onChange={(e) => onFormChange('next', e.target.value)} />
+          </label>
+          <label className="field-label">
+            Responsible
+            <input type="text" className="input-field" value={formData.owner} onChange={(e) => onFormChange('owner', e.target.value)} />
+          </label>
+          <label className="field-label">
+            Status
+            <select className="select-field" value={formData.status} onChange={(e) => onFormChange('status', e.target.value)}>
+              {allStatuses.filter((status) => status !== 'All').map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </select>
+          </label>
+        </FormPanel>
+      ) : null}
 
       <DataTable
         headers={['Machine', 'PM Item', 'Last PM', 'Next PM', 'Responsible', 'Status']}
-        rows={pmRecords}
-        rowMapper={(row) => (
-          <tr key={`${row.machine}-${row.task}`}>
+        rows={filteredRows}
+        rowMapper={(row, index) => (
+          <tr key={`${row.machine}-${row.task}-${index}`}>
             <td>{row.machine}</td>
             <td>{row.task}</td>
             <td>{row.last}</td>
             <td>{row.next}</td>
             <td>{row.owner}</td>
-            <td><StatusPill>{row.status}</StatusPill></td>
+            <td>
+              <StatusPill>{row.status}</StatusPill>
+            </td>
           </tr>
         )}
       />
@@ -396,7 +774,9 @@ function PMPage() {
   )
 }
 
-function ImprovementPage() {
+function ImprovementPage({ data, searchValue, onSearch, statusValue, onStatusChange, onExport }) {
+  const filteredRows = useMemo(() => filterRows(data, searchValue, statusValue), [data, searchValue, statusValue])
+
   return (
     <>
       <section className="dashboard-header">
@@ -404,12 +784,23 @@ function ImprovementPage() {
           <p className="eyebrow">Continuous improvement</p>
           <h1>Improvement log</h1>
         </div>
-        <div className="header-chip">3 opportunities</div>
+        <div className="header-chip">{filteredRows.length} opportunities</div>
       </section>
+
+      <PageToolbar
+        searchValue={searchValue}
+        onSearch={onSearch}
+        statusValue={statusValue}
+        onStatusChange={onStatusChange}
+        statusOptions={allStatuses}
+        onExport={() => onExport('improvement.csv', data)}
+        exportLabel="Export CSV"
+        showCreate={false}
+      />
 
       <DataTable
         headers={['Problem', 'Idea', 'Benefit', 'Owner', 'Due Date', 'Status']}
-        rows={improvementRecords}
+        rows={filteredRows}
         rowMapper={(row, index) => (
           <tr key={`${row.owner}-${index}`}>
             <td>{row.problem}</td>
@@ -417,7 +808,9 @@ function ImprovementPage() {
             <td>{row.benefit}</td>
             <td>{row.owner}</td>
             <td>{row.due}</td>
-            <td><StatusPill>{row.status}</StatusPill></td>
+            <td>
+              <StatusPill>{row.status}</StatusPill>
+            </td>
           </tr>
         )}
       />
@@ -427,26 +820,158 @@ function ImprovementPage() {
 
 function App() {
   const [activePage, setActivePage] = useState('Home')
+  const [searchValue, setSearchValue] = useState('')
+  const [statusFilter, setStatusFilter] = useState('All')
+  const [downtimeData, setDowntimeData] = useState(() => loadStoredData('downtime', downtimeRecords))
+  const [qualityData, setQualityData] = useState(() => loadStoredData('quality', qualityRecords))
+  const [pmData, setPmData] = useState(() => loadStoredData('pm', pmRecords))
+  const [improvementData] = useState(() => loadStoredData('improvement', improvementRecords))
+  const [showDowntimeForm, setShowDowntimeForm] = useState(false)
+  const [showQualityForm, setShowQualityForm] = useState(false)
+  const [showPmForm, setShowPmForm] = useState(false)
+  const [downtimeForm, setDowntimeForm] = useState({
+    machine: '',
+    line: '',
+    duration: '',
+    cause: '',
+    action: '',
+    owner: '',
+    status: 'Open',
+  })
+  const [qualityForm, setQualityForm] = useState({
+    defect: '',
+    engine: '',
+    process: '',
+    cause: '',
+    containment: '',
+    status: 'Open',
+  })
+  const [pmForm, setPmForm] = useState({
+    machine: '',
+    task: '',
+    last: '',
+    next: '',
+    owner: '',
+    status: 'Due soon',
+  })
 
-  const renderPage = () => {
+  useEffect(() => {
+    saveStoredData('downtime', downtimeData)
+  }, [downtimeData])
+
+  useEffect(() => {
+    saveStoredData('quality', qualityData)
+  }, [qualityData])
+
+  useEffect(() => {
+    saveStoredData('pm', pmData)
+  }, [pmData])
+
+  function handleFormChange(setter, field, value) {
+    setter((current) => ({ ...current, [field]: value }))
+  }
+
+  function handleDowntimeSubmit() {
+    setDowntimeData((current) => [downtimeForm, ...current])
+    setDowntimeForm({ machine: '', line: '', duration: '', cause: '', action: '', owner: '', status: 'Open' })
+    setShowDowntimeForm(false)
+  }
+
+  function handleQualitySubmit() {
+    setQualityData((current) => [qualityForm, ...current])
+    setQualityForm({ defect: '', engine: '', process: '', cause: '', containment: '', status: 'Open' })
+    setShowQualityForm(false)
+  }
+
+  function handlePmSubmit() {
+    setPmData((current) => [pmForm, ...current])
+    setPmForm({ machine: '', task: '', last: '', next: '', owner: '', status: 'Due soon' })
+    setShowPmForm(false)
+  }
+
+  function renderPage() {
     switch (activePage) {
       case 'Downtime':
-        return <DowntimePage />
+        return (
+          <DowntimePage
+            data={downtimeData}
+            searchValue={searchValue}
+            onSearch={setSearchValue}
+            statusValue={statusFilter}
+            onStatusChange={setStatusFilter}
+            onExport={(filename, rows) => exportToCsv(filename, ['Machine', 'Line', 'Duration', 'Cause', 'Action', 'Owner', 'Status'], rows)}
+            showForm={showDowntimeForm}
+            onToggleForm={() => setShowDowntimeForm((current) => !current)}
+            formData={downtimeForm}
+            onFormChange={(field, value) => handleFormChange(setDowntimeForm, field, value)}
+            onFormSubmit={handleDowntimeSubmit}
+          />
+        )
       case 'Quality':
-        return <QualityPage />
+        return (
+          <QualityPage
+            data={qualityData}
+            searchValue={searchValue}
+            onSearch={setSearchValue}
+            statusValue={statusFilter}
+            onStatusChange={setStatusFilter}
+            onExport={(filename, rows) => exportToCsv(filename, ['Defect Type', 'Engine Number', 'Process', 'Cause', 'Containment', 'Status'], rows)}
+            showForm={showQualityForm}
+            onToggleForm={() => setShowQualityForm((current) => !current)}
+            formData={qualityForm}
+            onFormChange={(field, value) => handleFormChange(setQualityForm, field, value)}
+            onFormSubmit={handleQualitySubmit}
+          />
+        )
       case 'PM':
-        return <PMPage />
+        return (
+          <PMPage
+            data={pmData}
+            searchValue={searchValue}
+            onSearch={setSearchValue}
+            statusValue={statusFilter}
+            onStatusChange={setStatusFilter}
+            onExport={(filename, rows) => exportToCsv(filename, ['Machine', 'PM Item', 'Last PM', 'Next PM', 'Responsible', 'Status'], rows)}
+            showForm={showPmForm}
+            onToggleForm={() => setShowPmForm((current) => !current)}
+            formData={pmForm}
+            onFormChange={(field, value) => handleFormChange(setPmForm, field, value)}
+            onFormSubmit={handlePmSubmit}
+          />
+        )
       case 'Improvement':
-        return <ImprovementPage />
+        return (
+          <ImprovementPage
+            data={improvementData}
+            searchValue={searchValue}
+            onSearch={setSearchValue}
+            statusValue={statusFilter}
+            onStatusChange={setStatusFilter}
+            onExport={(filename, rows) => exportToCsv(filename, ['Problem', 'Idea', 'Benefit', 'Owner', 'Due Date', 'Status'], rows)}
+          />
+        )
       default:
-        return <HomePage />
+        return (
+          <HomePage
+            searchValue={searchValue}
+            onSearch={setSearchValue}
+            statusValue={statusFilter}
+            onStatusChange={setStatusFilter}
+          />
+        )
     }
   }
+
+  useEffect(() => {
+    setSearchValue('')
+    setStatusFilter('All')
+  }, [activePage])
 
   return (
     <div className="dashboard-shell">
       <Sidebar active={activePage} onSelect={setActivePage} />
       <main className="dashboard-main">{renderPage()}</main>
+      <BottomNav active={activePage} onSelect={setActivePage} />
     </div>
   )
 }
